@@ -1,0 +1,939 @@
+---
+title: "Sentiments of War"
+subtitle: "Data Science 3 - Final Assignment"
+author: "Khawaja Hassan"
+date: '11st May 2022'
+output: 
+    html_document:
+        code_folding: hide
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+# Overview
+
+The purpose of the following article is to evaluate the sentiment analysis of Abhinandan case which led to political tension between both India and Pakistan. On 27 February 2019 Indian Air Force (IAF) entered the airspace on of Pakistan and in retaliation their plane was shot down and their pilot Abhinandan was captured by the Pakistani military. Later on 1 March 2019, after the order of the prime minister the pilot was released as peace gesture.However, at the time of the released there was an infux of mix sentiments coming in from both the side. 
+
+The government of Pakistan had a narrative that they want to deescalate the tensions between the two nations whereas the Indian narrative was that they were able pressurized the Pakistan government to release their pilot. On the other hand, we see mix emotions and sentiment when we evaluate the public tweets from both the sides. 
+
+## Questions
+
+Therefore, the aim of the following analysis is to assess:
+
+1-	Whether the public sentiment of each country was in line with their government narrative?
+2-	Did Indian really consider the release of their pilot as a goodwill gesture from Pakistan?
+
+
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+ library(tidytext)
+library(ggpubr)
+library(widyr)
+library(igraph)
+library(ggraph)
+library(topicmodels)
+library(writexl)
+library(scales)
+library(textdata)
+library(sentimentr)
+library(radarchart)
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+library(textclean)
+```
+
+# Web Scarping our Data set 
+
+There are three data set that we will be using for each side to form our analysis:
+
+1-	Public Tweets from each country 
+2-	Tweets from countries official pages (Pak Army, Indian Air force & etc)
+3-	 News articles from each country regarding this issue (supporting data set for official tweets)
+
+All the data which we will be using is scraped in Python since there were few limitations in using Twitter API in R. The first and foremost was that with twitter API you can only scrapped the data from the last week only and our analysis is for the year 2019. Therefore, we used Snscrape module in python to not only scrape the data from these dates but also able to filter down the tweets coming from each country with our required hashtag and targeted words. The web scrapping code for this dataset is [here](https://github.com/Khawaja9622/-Unstructured_text_analysis/blob/main/Data_scrapping.ipynb). 
+
+Moreover, for the articles we used newspaper3k module to extract all the text and the title for each article. It is good to mention the reason why we will be using these news articles along with our twitter dataset. The main purpose is to provide supporting text for the official tweets for each country since the text in these tweets were limited. Having some domain knowledge about how influenced the media is in these countries we will be able to gather more information about the government narrative.
+
+
+
+```{r message=FALSE, warning=FALSE}
+# calling official Indian handler tweets 
+official_indian_tweets<-read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/india_official_tweets.csv"))
+
+# calling official Pakistani handler tweets
+official_pakistan_tweets <- read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/pak_official_tweets.csv"))
+
+# Indian news article on the incidents 
+indian_news <- read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/indian_public_news.csv"))
+
+#Pakistani news article on the incident
+pakistan_news <-read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/pakistan_public_news.csv"))
+
+# India public tweets 
+india_public_tweet <- read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/india_public_tweets.csv"))
+ 
+# Pakistan public tweets 
+pakistan_public_tweet <- read.csv(url("https://raw.githubusercontent.com/Khawaja9622/-Unstructured_text_analysis/main/pakistan_public_tweets.csv"))
+
+```
+
+# Data Cleaning 
+
+The twitter data set had to go through massive cleaning that required us to remove the following from all the 4 data set which contained tweets:
+
+1-	Hash Tags & Retweets
+2-	Emoticon & Special Characters
+3-	Extra & Trailing white spaces
+4-	URLs & Punctuation
+5-	Numbers & Contractions
+6-	Keeping User & Tweets Column 
+
+
+
+```{r message=FALSE, warning=TRUE}
+# cleaning tweets from all the 4 data sets regarding tweets 
+
+## Removing Mentions 
+
+# Public Sentiments
+pakistan_public_tweet$content <- gsub('@\\S+', '',pakistan_public_tweet$content) 
+india_public_tweet$content <- gsub('@\\S+', '',india_public_tweet$content) 
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub('@\\S+', '',official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet <- gsub('@\\S+', '',official_indian_tweets$Tweet)
+
+## Removing Numbers 
+
+# Public Sentiments
+pakistan_public_tweet$content <- removeNumbers(pakistan_public_tweet$content)
+india_public_tweet$content <- removeNumbers(india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- removeNumbers(official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<- removeNumbers(official_indian_tweets$Tweet)
+
+
+## Remove Controls and special characters
+
+# Public Sentiments
+pakistan_public_tweet$content <-gsub('[[:cntrl:]]', '',pakistan_public_tweet$content)
+india_public_tweet$content <-gsub('[[:cntrl:]]', '', india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub('[[:cntrl:]]', '',official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<- gsub('[[:cntrl:]]', '',official_indian_tweets$Tweet)
+  
+  
+## Remove Emoticons
+
+# Public Sentiments
+pakistan_public_tweet$content <-sapply(pakistan_public_tweet$content,function(row) iconv(row, "latin1", "ASCII", sub=""))
+india_public_tweet$content <-sapply(india_public_tweet$content,function(row) iconv(row, "latin1", "ASCII", sub=""))
+# Official Tweets
+official_pakistan_tweets$Tweet <- sapply(official_pakistan_tweets$Tweet,function(row) iconv(row, "latin1", "ASCII", sub=""))
+official_indian_tweets$Tweet<- sapply(official_indian_tweets$Tweet,function(row) iconv(row, "latin1", "ASCII", sub=""))
+
+
+#Removing Hashtags
+
+# Public Sentiments
+pakistan_public_tweet$content <-str_replace_all(pakistan_public_tweet$content,"#[a-z,A-Z]*","")
+india_public_tweet$content <-str_replace_all(india_public_tweet$content,"#[a-z,A-Z]*","")
+# Official Tweets
+official_pakistan_tweets$Tweet <- str_replace_all(official_pakistan_tweets$Tweet,"#[a-z,A-Z]*","")
+official_indian_tweets$Tweet<- str_replace_all(official_indian_tweets$Tweet,"#[a-z,A-Z]*","")
+  
+
+## Remove ReTweets
+
+
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub('\\b+RT', '', pakistan_public_tweet$content)
+india_public_tweet$content <-  gsub('\\b+RT', '', india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <-  gsub('\\b+RT', '', official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub('\\b+RT', '', official_indian_tweets$Tweet)
+
+## Removing Contraction
+
+# Public Sentiments
+pakistan_public_tweet$content <-  replace_contraction(pakistan_public_tweet$content)
+india_public_tweet$content <-replace_contraction(india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <-  replace_contraction(official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  replace_contraction(official_indian_tweets$Tweet)
+
+## Keep tweets with greater than 8 words
+
+# Public Sentiments
+pakistan_public_tweet <- pakistan_public_tweet[sapply(strsplit(as.character(pakistan_public_tweet$content)," "),length)>8,]
+india_public_tweet <- india_public_tweet[sapply(strsplit(as.character(india_public_tweet$content)," "),length)>8,]
+# Official Tweets
+official_pakistan_tweets <- official_pakistan_tweets[sapply(strsplit(as.character(official_pakistan_tweets$Tweet)," "),length)>8,]
+official_indian_tweets <-official_indian_tweets[sapply(strsplit(as.character(official_indian_tweets$Tweet)," "),length)>8,] 
+
+
+## Remove numbers in beginning of tweets
+
+number_list <- "(1/|2/|3/|4/|5/|6/|7/|8/9/|10/)"
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub(number_list, "", pakistan_public_tweet$content )
+india_public_tweet$content <-  gsub(number_list, "",india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <-  gsub(number_list, "", official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub(number_list, "",official_indian_tweets$Tweet)
+
+
+## Remove trailing whitespaces
+
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub("[[:space:]]*$","", pakistan_public_tweet$content)
+india_public_tweet$content <-  gsub("[[:space:]]*$","",india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub("[[:space:]]*$","",official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub("[[:space:]]*$","", official_indian_tweets$Tweet)
+
+
+## Remove extra whitespaces
+
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub(' +',' ', pakistan_public_tweet$content )
+india_public_tweet$content <-  gsub(' +',' ', india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub(' +',' ', official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub(' +',' ', official_indian_tweets$Tweet)
+
+
+
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub("amp", "and", pakistan_public_tweet$content, fixed = TRUE)
+india_public_tweet$content <-  gsub("amp", "and", india_public_tweet$content, fixed = TRUE)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub("amp", "and", official_pakistan_tweets$Tweet, fixed = TRUE)
+official_indian_tweets$Tweet<- gsub("amp", "and", official_indian_tweets$Tweet, fixed = TRUE)
+
+
+
+## Remove URLs
+
+# Public Sentiments
+pakistan_public_tweet$content <-  gsub('http\\S+\\s*', '', pakistan_public_tweet$content )
+india_public_tweet$content <-  gsub('http\\S+\\s*', '', india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub('http\\S+\\s*', '', official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub('http\\S+\\s*', '', official_indian_tweets$Tweet)
+
+## Remove Punctuation
+
+# Public Sentiments
+pakistan_public_tweet$content <- removePunctuation(pakistan_public_tweet$content,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+india_public_tweet$content <- removePunctuation(india_public_tweet$content,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+# Official Tweets
+official_pakistan_tweets$Tweet <- removePunctuation(official_pakistan_tweets$Tweet,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+official_indian_tweets$Tweet<-  removePunctuation(official_indian_tweets$Tweet,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+pakistan_public_tweet$content <- removeNumbers(pakistan_public_tweet$content)
+india_public_tweet$content <- removeNumbers(india_public_tweet$content)
+official_pakistan_tweets$Tweet <- removeNumbers(official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet <- removeNumbers(official_indian_tweets$Tweet)
+
+
+
+# Removing some special characters which were not detected earlier 
+
+# Public Sentiments 
+pakistan_public_tweet$content <-  gsub("[[:punct:]]"," ", pakistan_public_tweet$content)
+india_public_tweet$content <-  gsub('[[:punct:]]',' ', india_public_tweet$content)
+# Official Tweets
+official_pakistan_tweets$Tweet <- gsub("[[:punct:]]"," ", official_pakistan_tweets$Tweet)
+official_indian_tweets$Tweet<-  gsub("[[:punct:]]"," ",official_indian_tweets$Tweet)
+
+# selecting only user and content column 
+
+# Public Sentiments 
+pakistan_public_tweet <- pakistan_public_tweet %>%  select("user","content")
+india_public_tweet <- india_public_tweet %>%  select("user","content")
+# Official Tweets
+official_pakistan_tweets <- official_pakistan_tweets %>%  select("User","Tweet")
+official_indian_tweets <- official_indian_tweets %>%  select("User","Tweet")
+
+
+```
+
+## UNNEST TOKENIZATION:
+
+The purpose of this step was to split the text column into tokens, flattening the table into one-token-per-row. Once we created the token, we need to get rid of the stop words since they must be removed before we start running our sentiment analysis.
+
+
+```{r message=FALSE, warning=FALSE}
+
+# UNNEST TOKENIZATION
+
+# Public Sentiments 
+#detach("package:plyr", unload = TRUE)
+library(dplyr)
+
+pakistan_public_token <- pakistan_public_tweet %>%
+  mutate(tweet_number = row_number()) %>%
+  group_by(user) %>%
+  ungroup() %>%
+  unnest_tokens(word, content)
+
+india_public_token <- india_public_tweet %>%
+  mutate(tweet_number = row_number()) %>%
+  group_by(user) %>%
+  ungroup() %>%
+  unnest_tokens(word, content)
+
+
+# Official Tweets
+official_pakistan_token <- official_pakistan_tweets %>%
+  mutate(tweet_number = row_number()) %>%
+  group_by(User) %>%
+  ungroup() %>%
+  unnest_tokens(word, Tweet)
+
+official_indian_token <- official_indian_tweets %>%
+  mutate(tweet_number = row_number()) %>%
+  group_by(User) %>%
+  ungroup() %>%
+  unnest_tokens(word, Tweet)
+
+# REMOVING STOP WORDS
+
+# Public Sentiments 
+pakistan_public_token <- pakistan_public_token %>% anti_join(stop_words)
+india_public_token <- india_public_token%>%  anti_join(stop_words)
+
+# Official Tweets
+official_pakistan_token <- official_pakistan_token %>% anti_join(stop_words)
+official_indian_token <- official_indian_token %>% anti_join(stop_words)
+```
+
+# Sentiment Analysis 
+
+Three general-purpose lexicons which we will be using are:
+
+•	AFINN: assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment.
+•	BING: The Bing lexicon categorizes words in a binary fashion into positive and negative categories.
+•	NRC: The nrc lexicon categorizes words in a binary fashion (Yes/No) into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust
+
+
+
+### AFINN lexicon 
+
+Using tokens, we created for the official and public tweets we run AFINN sentiment to check Top 25 positive and negative words for each of the country. When comparing the Pakistan public and government sentiment we see quite some similar words such as peace, brave, etc being the at the top of the list. The words peace occurred in amongst the topmost positive words from both the side. However, we see an interesting finding when we run comparison on the words from Indian Government and their public tweets. Firstly, we see similar public response as Pakistan one with higher number of positive words being used and once again the word peace was highly occurred in Indian public tweets. However, when we see the list of words for the Indian official twitter handler we see negative words in lead with words like attack, ban, strike being at the top of the list. From this word list we could see the inconsistency between what the government narrative was and the public sentiment in India. 
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+# Top Positive and negative words 
+
+# Pakistan Public Sentiment 
+afinn <- get_sentiments("afinn")
+a <- pakistan_public_token %>% inner_join(afinn)
+viz1 <- pakistan_public_token  %>%  inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+
+v1 <- viz1  %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words from pakistan Public Sentiment") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+v1
+
+#India Public Sentiment
+
+viz2 <- india_public_token %>%  inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+
+
+v2 <- viz2  %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words from India Public Sentiment") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+v2
+```
+
+
+```{r message=FALSE, warning=FALSE}
+# Top Positive and negative words 
+
+# Pakistan Official Sentiment 
+
+viz3 <- official_pakistan_token %>%  inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+
+v3 <- viz3  %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words from Pakistan Official Twitter") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+v3
+
+#India Public Sentiment
+
+viz4 <- official_indian_token %>%  inner_join(afinn, by = c(word = "word")) %>%
+  dplyr::count(word, value, sort = TRUE) %>%
+  ungroup()
+
+
+v4 <- viz4  %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(25) %>%
+  mutate(word = reorder(word, contribution)) %>%
+  ggplot(aes(word, n * value, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  xlab("Top 25 popular words from India Official Twitter") +
+  ylab("Sentiment score * number of occurrences") +
+  coord_flip()+
+  theme_light()
+v4
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#articles
+pakistan_news$text <- removePunctuation(pakistan_news$text,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+
+# Pak news token
+paknews_token <- pakistan_news %>%
+  mutate(title_number = row_number()) %>%
+  group_by(title) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+
+# removing stop words
+paknews_token <- paknews_token %>% anti_join(stop_words)
+
+
+indian_news$text <- removePunctuation(indian_news$text,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+# Indian news token
+indnews_token <- indian_news %>%
+  mutate(title_number = row_number()) %>%
+  group_by(title) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+
+# removing stop words
+indnews_token  <- indnews_token  %>% anti_join(stop_words)
+
+# removing unwanted columns
+indnews_token <- indnews_token  %>%  select("title","title_number", "word")
+paknews_token <- paknews_token %>% select("title","title_number", "word")
+```
+
+To further see what their media was portraying and mention we used articles during these dates regarding the release of the Indian pilot and created word cloud using for the negative and positive classified by the AFINN sentiment analysis. Based on the result we got we can compare how the media of both the country are heavily influenced by the government and have the same narrative as their officials. The reason we can say that by looking at the positive and negative words being mentioned are like one mention in their official tweets. Therefore, we will be combining the official tweets and the articles to support enhance our text for better sentiment analysis for government officials.
+
+
+```{r message=FALSE, warning=FALSE}
+
+library(wordcloud)
+library(reshape2)
+
+# Word Cloud for Articles
+
+# Pakistan news word cloud 
+v5 <- paknews_token  %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("dark red", "dark green"),
+                   max.words = 100)
+v5
+
+# Indian new word cloud
+v6 <- indnews_token  %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  acast(word ~ sentiment, value.var = "n", fill = 0) %>%
+  comparison.cloud(colors = c("dark red", "dark green"),
+                   max.words = 100)
+v6
+```
+
+
+### BING Lexicon:
+
+Now we are using Bing Lexicon to check the sentiment of the tweets and the text based on the classification of positive and negative words.To run this sentiment, we imported list of positive and negative words which are defined in their respective txt and form a function to illustrate the count of positive, negative, and neutral sentiments. 
+
+```{r message=FALSE, warning=FALSE}
+#Analysis 
+#Sentiment Analysis on Tweets ~ Public Sentiment
+
+#Loading sentiment word lists
+
+negative = scan("/Users/khawajahassan/Dropbox/My Mac (Khawaja’s MacBook Air)/Desktop/negative-words.txt", what = 'character', comment.char = ';')
+positive = scan("/Users/khawajahassan/Dropbox/My Mac (Khawaja’s MacBook Air)/Desktop/positive-words.txt", what = 'character', comment.char = ';')
+
+# add your list of words below as you wish if missing in above read lists
+pos.words = c(positive,'peace','gesture','prizes','prize','thanks','appreciated',"lauded",
+              'Grt','gr8','great','trending','recovering','brainstorm','leader','released',"return","return","release")
+neg.words = c(negative,'wtf','attack','waiting','epicfail','Fight','fighting',"	gravest","bombs",
+              'arrest','no','not','accused','armed',"tensions",'captured',"escalating","strikes","terrorists")
+
+# function for sentiment scoring
+
+score.sentiment = function(sentences, pos.words, neg.words, .progress='none')
+{
+  require(plyr)
+  require(stringr)
+  
+  # we are giving vector of sentences as input. 
+  # plyr will handle a list or a vector as an "l" for us
+  # we want a simple array of scores back, so we use "l" + "a" + "ply" = laply:
+  scores = laply(sentences, function(sentence, pos.words, neg.words) {
+    
+    # clean up sentences with R's regex-driven global substitute, gsub() function:
+    sentence = gsub('https://','',sentence)
+    sentence = gsub('http://','',sentence)
+    sentence = gsub('[^[:graph:]]', ' ',sentence)
+    sentence = gsub('[[:punct:]]', '', sentence)
+    sentence = gsub('[[:cntrl:]]', '', sentence)
+    sentence = gsub('\\d+', '', sentence)
+    sentence = str_replace_all(sentence,"[^[:graph:]]", " ")
+    # and convert to lower case:
+    sentence = tolower(sentence)
+    
+    # split into words. str_split is in the stringr package
+    word.list = str_split(sentence, '\\s+')
+    # sometimes a list() is one level of hierarchy too much
+    words = unlist(word.list)
+    
+    # compare our words to the dictionaries of positive & negative terms
+    pos.matches = match(words, pos.words)
+    neg.matches = match(words, neg.words)
+    
+    # match() returns the position of the matched term or NA
+    # we just want a TRUE/FALSE:
+    pos.matches = !is.na(pos.matches)
+    neg.matches = !is.na(neg.matches)
+    
+    # TRUE/FALSE will be treated as 1/0 by sum():
+    score = sum(pos.matches) - sum(neg.matches)
+    
+    return(score)
+  }, pos.words, neg.words, .progress=.progress )
+  
+  scores.df = data.frame(score=scores, text=sentences)
+  return(scores.df)
+}
+
+
+```
+
+Based on the following bar plot we see that in fact the statement of Pakistani media was neutral in majority, followed by negative sentiments. However, the public sentiment was mainly positive and with neutral and negative being somewhat similar.
+
+
+```{r message=FALSE, warning=FALSE}
+
+# Official sentiment of Pakistan And Media sentiment
+
+indian_news <- indian_news %>% select("title","text")
+pakistan_news <- pakistan_news %>% select("title","text")
+
+#Rbind the official tweets and the news article in one data_frame
+colnames(pakistan_news)=colnames(official_pakistan_tweets)
+combined_pakistan<- rbind(pakistan_news,official_pakistan_tweets)
+
+combined_pakistan_analysis <- score.sentiment(combined_pakistan$Tweet, pos.words, neg.words)
+# sentiment score frequency table
+#table(combined_pakistan_analysis$score)
+
+ combined_pakistan_analysis %>%
+  ggplot(aes(x=score)) + 
+  geom_histogram(binwidth = 1, fill = "lightblue")+ 
+  ylab("Frequency") + 
+  xlab("sentiment score") +
+  ggtitle("Distribution of Sentiment scores of the tweets") +
+  ggeasy::easy_center_title()
+
+# Data Visualization for count
+
+neutral_p <- length(which(combined_pakistan_analysis$score == 0))
+positive_p <- length(which(combined_pakistan_analysis$score > 0))
+negative_p <- length(which(combined_pakistan_analysis$score < 0))
+Sentiment_p <- c("Positive","Neutral","Negative")
+Count_p <- c(positive_p,neutral_p,negative_p)
+output_p <- data.frame(Sentiment_p,Count_p)
+output_p$Sentiment_p<-factor(output_p$Sentiment_p,levels=Sentiment_p)
+v7 <- ggplot(output_p, aes(x=Sentiment_p,y=Count_p))+
+  geom_bar(stat = "identity", aes(fill = Sentiment_p))+
+  ggtitle("Barplot of Pakistan's Government Sentiment")
+
+v7
+####################################
+
+pakistan_public_analysis <- score.sentiment(pakistan_public_tweet$content, pos.words, neg.words)
+# sentiment score frequency table
+#table(pakistan_public_analysis$score)
+
+pakistan_public_analysis %>%
+  ggplot(aes(x=score)) + 
+  geom_histogram(binwidth = 1, fill = "lightblue")+ 
+  ylab("Frequency") + 
+  xlab("sentiment score") +
+  ggtitle("Distribution of Sentiment scores of the tweets") +
+  ggeasy::easy_center_title()
+
+# Data Visualization for count
+
+neutral <- length(which(pakistan_public_analysis$score == 0))
+positive <- length(which(pakistan_public_analysis$score > 0))
+negative <- length(which(pakistan_public_analysis$score < 0))
+Sentiment <- c("Positive","Neutral","Negative")
+Count <- c(positive,neutral,negative)
+output <- data.frame(Sentiment,Count)
+output$Sentiment<-factor(output$Sentiment,levels=Sentiment)
+v8 <- ggplot(output, aes(x=Sentiment,y=Count))+
+  geom_bar(stat = "identity", aes(fill = Sentiment))+
+  ggtitle("Barplot of Pakistan's Public Sentiment")
+v8
+
+```
+
+The interesting finding comes when we evaluate the Indian media and public sentiment because there is a 360-degree difference in the sentiment. The media and official statements were mainly negative and positive being the least one, but the public sentiment was telling different story with positive sentiment winning by a margin. 
+
+```{r}
+
+#Rbind the official tweets and the news article in one data_frame
+colnames(indian_news)=colnames(official_indian_tweets)
+combined_indian <- rbind(indian_news,official_indian_tweets)
+
+combined_indian_analysis <- score.sentiment(combined_indian$Tweet, pos.words, neg.words)
+# sentiment score frequency table
+table(combined_indian_analysis$score)
+
+combined_indian_analysis %>%
+  ggplot(aes(x=score)) + 
+  geom_histogram(binwidth = 1, fill = "dark blue")+ 
+  ylab("Frequency") + 
+  xlab("sentiment score") +
+  ggtitle("Distribution of Sentiment scores of the tweets") +
+  ggeasy::easy_center_title()
+
+# Data Visualization for count
+
+neutral_c <- length(which(combined_indian_analysis$score == 0))
+positive_c <- length(which(combined_indian_analysis$score > 0))
+negative_c <- length(which(combined_indian_analysis$score < 0))
+Sentiment_c <- c("Positive","Neutral","Negative")
+Count_c <- c(positive_c,neutral_c,negative_c)
+output_c <- data.frame(Sentiment_c,Count_c)
+output_c$Sentiment_c<-factor(output_c$Sentiment_c,levels=Sentiment_c)
+v9 <- ggplot(output_c, aes(x=Sentiment_c,y=Count_c))+
+  geom_bar(stat = "identity", aes(fill = Sentiment_c))+
+  ggtitle("Barplot of India's Government Sentiment")
+
+
+########################################################################
+
+india_public_analysis <- score.sentiment(india_public_tweet$content, pos.words, neg.words)
+# sentiment score frequency table
+table(india_public_analysis$score)
+
+india_public_analysis %>%
+  ggplot(aes(x=score)) + 
+  geom_histogram(binwidth = 1, fill = "dark blue")+ 
+  ylab("Frequency") + 
+  xlab("sentiment score") +
+  ggtitle("Distribution of Sentiment scores of the tweets") +
+  ggeasy::easy_center_title()
+
+# Data Visualization for count
+
+neutral_1 <- length(which(india_public_analysis$score == 0))
+positive_1 <- length(which(india_public_analysis$score > 0))
+negative_1 <- length(which(india_public_analysis$score < 0))
+Sentiment_1 <- c("Positive","Neutral","Negative")
+Count_1 <- c(positive_1,neutral_1,negative_1)
+output_1 <- data.frame(Sentiment_1,Count_1)
+output_1$Sentiment_1<-factor(output_1$Sentiment_1,levels=Sentiment_1)
+v10 <- ggplot(output_1, aes(x=Sentiment_1,y=Count_1))+
+  geom_bar(stat = "identity", aes(fill = Sentiment_1))+
+  ggtitle("Barplot of India's Public Sentiment")
+v10
+
+```
+### NRC Lexicon:
+
+To deepen our research, we are now trying to find out the emotions and validate how the emotions differ between each of them. Starting with the Pakistan’s data we can observe that positive and trust emotion are similar between both the government narrative and public opinion followed by joy and negative emotions.
+
+```{r}
+nrc <- get_sentiments("nrc")
+
+nrc_pak_official <- official_pakistan_token %>% inner_join(nrc)  
+nrc_pak <- pakistan_public_token %>% inner_join(nrc)  
+
+#PAKPUBLIC
+nrc_pak_viz <- ggplot(nrc_pak) +
+  aes(x = sentiment, fill = sentiment) +
+  geom_bar() +
+  scale_fill_viridis_d(option = "cividis", direction = 1) +
+  labs(title = "Pakistan's Publics Emotional Sentiment") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 15L,
+    face = "bold",
+    hjust = 0.5)
+  )
+ nrc_pak_viz
+ 
+# PAK OFFICAL
+
+nrc_pak_viz1 <- ggplot(nrc_pak_official) +
+  aes(x = sentiment, fill = sentiment) +
+  geom_bar() +
+  scale_fill_viridis_d(option = "cividis", direction = 1) +
+  labs(title = "Pakistan's Official Emotional Sentiment") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 15L,
+    face = "bold",
+    hjust = 0.5)
+  )
+nrc_pak_viz1
+
+
+```
+
+Whereas, on the other hand once again the government narrative was highly negative with anger and fear being amongst the top emotions. These emotions once again are conflicting with what the public tweets are saying and showed a similar positive emotion likes the analysis above. 
+
+
+```{r}
+nrc_ind_official <- official_indian_token %>% inner_join(nrc)  
+nrc_ind <- india_public_token %>% inner_join(nrc)  
+
+#India PUBLIC
+nrc_ind_viz <- ggplot(nrc_ind ) +
+  aes(x = sentiment, fill = sentiment) +
+  geom_bar() +
+  scale_fill_viridis_d(option = "cividis", direction = 1) +
+  labs(title = "India's Publics Emotional Sentiment") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 15L,
+    face = "bold",
+    hjust = 0.5)
+  )
+ 
+nrc_ind_viz 
+# India OFFICAL
+
+nrc_ind_viz1 <- ggplot(nrc_ind_official) +
+  aes(x = sentiment, fill = sentiment) +
+  geom_bar() +
+  scale_fill_viridis_d(option = "cividis", direction = 1) +
+  labs(title = "India's Official Emotional Sentiment") +
+  coord_flip() +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(size = 15L,
+    face = "bold",
+    hjust = 0.5)
+  )
+nrc_ind_viz1 
+
+```
+
+## Co-occurring Words:
+
+Lastly, we created text network diagram to analysis the list of words which will are frequently occurring together in the combined data set of media and official statement. Here we used to the combined tokenized dataset for each country and filter pairs which appeared more than 6 times. Following are the illustration for both
+
+
+
+```{r}
+
+# Word co-occurrences and correlations ------------------------------------
+
+#Pakistan Articles 
+
+library(dplyr)
+# create df with artist + title as IDs
+df_cooc <- paknews_token %>% 
+  mutate(id = paste0(title_number, word))
+
+# get words that occur together frequently
+content_word_pairs <- df_cooc %>% 
+  pairwise_count(word, title_number, sort = TRUE, upper = FALSE)
+
+# plot them on a network
+set.seed(1234)
+g <- content_word_pairs %>%
+  filter(n >= 6) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "kk") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n),edge_colour = "dark green",) +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  ggtitle('Most Frequent Co-occuring Words') +
+  theme_void() +
+  theme(plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) )
+g
+
+###################
+# Indian 
+
+df_cooc_1 <- indnews_token %>% 
+  mutate(id = paste0(title_number, word))
+
+# get words that occur together frequently
+content_word_pairs_1 <- df_cooc_1 %>% 
+  pairwise_count(word, title_number, sort = TRUE, upper = FALSE)
+
+# plot them on a network
+set.seed(1234)
+gg <- content_word_pairs_1 %>%
+  filter(n >= 6) %>%
+  graph_from_data_frame() %>%
+  ggraph(layout = "kk") +
+  geom_edge_link(aes(edge_alpha = n, edge_width = n),edge_colour = " light blue",) +
+  geom_node_point(size = 5) +
+  geom_node_text(aes(label = name), repel = TRUE, 
+                 point.padding = unit(0.2, "lines")) +
+  ggtitle('Most Frequent Co-occuring Words') +
+  theme_void() +
+  theme(plot.title = element_text( size = 12, face = "bold", hjust = 0.5 ) )
+gg
+
+
+```
+
+## Limitation of the approach:
+
+All the above sentiment analysis approach are using unigram model to assess or to give score to text. Therefore, there are instance when they have a lot of positive and negative words but still, they average put to be neutral or near to zero. For this reason, one can use the n-gram approach to check the sentiment in group of words and this might be a better approach. However, in our case we did try to use tri-gram approach, but it turns out that most of the words were returning to be neutral since they were not many variances in sentiment detect in the tri-gram. The code for this can found at my [GITHUB]
+
+
+## Conclusion:
+
+The sole purpose of this analyses was to understand the difference between the emotions and sentiments in the reports of two nations regarding a similar topic. The reason for the selection of this topic was that it provides a good example on difference in opinions. 
+
+To conclude, based on our finding we can say that it seems that Indian government narrative was inconsistent with what the public were expressing on the twitter, whereas quote some similarity was witness within Pakistan government narrative and public opinion. Moreover, moving to our second question of whether India considered Pakistan releasing their pilot as a peace gesture. It seems that Indian government had a narrative that they forced and pressurize the government as their words seems to be quite assertiveness in comparison to the Pakistani statements. Therefore, we can conclude that the as much as Pakistan think they made a peaceful gesture towards de-escalation , the Indian had some other perspective.
+
+
+
+
+```{r}
+## trigram
+# colnames(indian_news)=colnames(official_indian_tweets)
+# combined_indian <- rbind(indian_news,official_indian_tweets)
+# 
+# detach("package:plyr", unload = TRUE)
+# library(dplyr)
+# 
+# trigram_india <- combined_indian %>%
+#   mutate(tweet_number = row_number()) %>%
+#   group_by(User) %>%
+#   ungroup() %>%
+#   unnest_tokens(trigram, Tweet, token = "ngrams", n = 3)
+# 
+# # removing stop words from bigram
+# 
+# # Separate the two words
+# bigrams_separated_india <- trigram_india  %>%
+#   separate(trigram, c("word1", "word2","word3"), sep = " ")
+# 
+# # Filter out stopwords
+# bigrams_filtered_india <- trigrams_separated_india %>%
+#   filter(!word1 %in% stop_words$word) %>%
+#   filter(!word2 %in% stop_words$word) %>% 
+#    filter(!word3 %in% stop_words$word)
+# 
+# # Count the new bigrams
+# bigram_counts_india <- trigrams_filtered_india %>% 
+#   count(word1, word2, word3, sort = TRUE)
+# 
+# # Unite the bigrams to form words
+# trigrams_united_india <- trigrams_filtered_india %>%
+#   unite(bigram, word1, word2, word3, sep = " ")
+# 
+# # sentiment 
+# india_bigram_analysis <- score.sentiment(trigrams_united_india$trigram, pos.words, neg.words)
+# # sentiment score frequency table
+# table(india_trigram_analysis$score)
+# 
+# india_trigram_analysis %>%
+#   ggplot(aes(x=score)) + 
+#   geom_histogram(binwidth = 1, fill = "dark blue")+ 
+#   ylab("Frequency") + 
+#   xlab("sentiment score") +
+#   ggtitle("Distribution of Sentiment scores of the tweets") +
+#   ggeasy::easy_center_title()
+# 
+# # Data Visualization for count
+# 
+# neutral <- length(which(india_trigram_analysis$score == 0))
+# positive<- length(which(india_trigram_analysis$score > 0))
+# negative <- length(which(india_trigram_analysis$score < 0))
+# Sentiment <- c("Positive","Neutral","Negative")
+# Count <- c(positive,neutral,negative)
+# output <- data.frame(Sentiment,Count)
+# output$Sentiment<-factor(output$Sentiment,levels=Sentiment)
+# ggplot(output, aes(x=Sentiment,y=Count))+
+#   geom_bar(stat = "identity", aes(fill = Sentiment))+
+#   ggtitle("Barplot of India's Government Sentiment")
+
+
+```
+
